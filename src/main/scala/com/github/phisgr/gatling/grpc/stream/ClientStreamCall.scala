@@ -4,17 +4,15 @@ import com.github.phisgr.gatling.generic.util.EventLoopHelper
 import com.github.phisgr.gatling.grpc.check.{GrpcCheck, GrpcResponse}
 import com.github.phisgr.gatling.grpc.protocol.Statuses.{MultipleResponses, NoResponses}
 import com.github.phisgr.gatling.grpc.stream.StreamCall.{BothOpen, Cancelled, ClientStreamState, Completed}
-import com.github.phisgr.gatling.grpc.util.{GrpcStringBuilder, delayedParsing, statusCodeOption, toProtoString, wrongTypeMessage}
+import com.github.phisgr.gatling.grpc.util.{delayedParsing, statusCodeOption, toProtoString, wrongTypeMessage}
 import com.typesafe.scalalogging.StrictLogging
 import io.gatling.commons.stats.{KO, OK}
 import io.gatling.commons.util.Clock
-import io.gatling.commons.util.StringHelper.Eol
 import io.gatling.commons.validation.Validation
 import io.gatling.core.action.Action
 import io.gatling.core.check.Check
 import io.gatling.core.session.Session
 import io.gatling.core.stats.StatsEngine
-import io.gatling.jdk.util.StringBuilderPool
 import io.grpc.MethodDescriptor.Marshaller
 import io.grpc.{ClientCall, Metadata, Status}
 import io.netty.channel.EventLoop
@@ -143,22 +141,32 @@ class ClientStreamCall[Req, Res](
     )
     val newSession = withStatus.logGroupRequestTimings(startTimestamp = startTimestamp, endTimestamp = endTimestamp)
 
+    def sessionToString(session: Session): String =
+      session.attributes.map { case (k, v) => s"$k -> $v" }.mkString("Session:\n", "\n", "")
 
-    def dump = {
+    def responseToString(body: Any, grpcStatus: Status, trailers: Metadata): String = {
+      val trailersStr = trailers.toString // replace with pretty-print if needed
+      s"""
+         |Body: $body
+         |gRPC Status: $grpcStatus
+         |Trailers: $trailersStr
+   """.stripMargin
+    }
+
+    def dump: String = {
       val bodyParsed = delayedParsing(res, responseMarshaller)
-      StringBuilderPool.DEFAULT
-        .get()
-        .append(Eol)
-        .appendWithEol(">>>>>>>>>>>>>>>>>>>>>>>>>>")
-        .appendWithEol("Client Stream:")
-        .appendWithEol(s"$requestName - $streamName: $status ${errorMessage.getOrElse("")}")
-        .appendWithEol("=========================")
-        .appendSession(session)
-        .appendWithEol("=========================")
-        .appendWithEol("gRPC response:")
-        .appendResponse(bodyParsed, grpcStatus, trailers)
-        .append("<<<<<<<<<<<<<<<<<<<<<<<<<")
-        .toString
+      val sb = new StringBuilder()
+      sb.append(System.lineSeparator())
+      sb.append(">>>>>>>>>>>>>>>>>>>>>>>>>>").append(System.lineSeparator())
+      sb.append("Client Stream:").append(System.lineSeparator())
+      sb.append(s"$requestName - $streamName: $status ${errorMessage.getOrElse("")}").append(System.lineSeparator())
+      sb.append("=========================").append(System.lineSeparator())
+      sb.append(sessionToString(session)).append(System.lineSeparator())
+      sb.append("=========================").append(System.lineSeparator())
+      sb.append("gRPC response:").append(System.lineSeparator())
+      sb.append(responseToString(bodyParsed, grpcStatus, trailers)).append(System.lineSeparator())
+      sb.append("<<<<<<<<<<<<<<<<<<<<<<<<<")
+      sb.toString
     }
 
     if (status == KO) {
