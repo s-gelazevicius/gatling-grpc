@@ -6,17 +6,17 @@ import com.github.phisgr.gatling.grpc.ClientCalls
 import com.github.phisgr.gatling.grpc.check.GrpcResponse
 import com.github.phisgr.gatling.grpc.protocol.Statuses.{MultipleResponses, NoResponses}
 import com.github.phisgr.gatling.grpc.request.UnaryResponse
-import com.github.phisgr.gatling.grpc.util.{GrpcStringBuilder, delayedParsing, statusCodeOption}
+import com.github.phisgr.gatling.grpc.util.{delayedParsing, statusCodeOption}
 import io.gatling.commons.stats.{KO, OK}
 import io.gatling.commons.util.Clock
-import io.gatling.commons.util.StringHelper.Eol
 import io.gatling.commons.validation.Validation
+import io.gatling.core.Predef.value2Expression
 import io.gatling.core.action.Action
 import io.gatling.core.check.Check
 import io.gatling.core.session.{Expression, Session}
 import io.gatling.core.stats.StatsEngine
 import io.gatling.core.structure.ScenarioContext
-import io.gatling.jdk.util.StringBuilderPool
+import io.gatling.core.controller.throttle.Throttler
 import io.grpc._
 
 class GrpcCallAction[Req, Res](
@@ -63,8 +63,9 @@ class GrpcCallAction[Req, Res](
     } yield {
       val call = newCall(session, callOptions)
       if (throttler ne null) {
-        throttler.throttle(session.scenario, () =>
-          run(call, resolvedPayload, session, resolvedRequestName = name, headers)
+        throttler ! Throttler.Command.ThrottledRequest(
+          session.scenario,
+          () => run(call, resolvedPayload, session, resolvedRequestName = name, headers)
         )
       } else {
         run(call, resolvedPayload, session, resolvedRequestName = name, headers)
@@ -149,25 +150,48 @@ class GrpcCallAction[Req, Res](
         withStatus.logGroupRequestTimings(startTimestamp = startTimestamp, endTimestamp = endTimestamp)
       }
 
-      def dump = {
+      def dump: String = {
         val bodyParsed = delayedParsing(body, responseMarshaller)
 
-        StringBuilderPool.DEFAULT
-          .get()
-          .append(Eol)
-          .appendWithEol(">>>>>>>>>>>>>>>>>>>>>>>>>>")
-          .appendWithEol("Request:")
-          .appendWithEol(s"$fullRequestName: $status ${errorMessage.getOrElse("")}")
-          .appendWithEol("=========================")
-          .appendSession(session)
-          .appendWithEol("=========================")
-          .appendWithEol("gRPC request:")
-          .appendRequest(payload, headers)
-          .appendWithEol("=========================")
-          .appendWithEol("gRPC response:")
-          .appendResponse(bodyParsed, grpcStatus, trailers)
-          .append("<<<<<<<<<<<<<<<<<<<<<<<<<")
-          .toString
+        def sessionToString(session: Session): String =
+          session.attributes
+            .map { case (k, v) => s"$k -> $v" }
+            .mkString("Session:\n", "\n", "")
+
+        def payloadToString(payload: Any): String =
+          if (payload == null) "Payload: null" else payload.toString
+
+        def responseToString(response: Any, grpcStatus: io.grpc.Status, trailers: io.grpc.Metadata): String = {
+          val statusStr = if (grpcStatus == null) "Status: null" else s"Status: ${grpcStatus.getCode} - ${grpcStatus.getDescription}"
+          val trailersStr = if (trailers == null) "Trailers: null" else {
+            import scala.jdk.CollectionConverters._
+            val entries = trailers.keys().asScala.map { key =>
+              val value = trailers.get(io.grpc.Metadata.Key.of(key, io.grpc.Metadata.ASCII_STRING_MARSHALLER))
+              s"$key -> $value"
+            }
+            entries.mkString("Trailers:\n", "\n", "")
+          }
+          s"Response:\n$response\n$statusStr\n$trailersStr"
+        }
+
+        val sb = new StringBuilder()
+
+        sb.append(System.lineSeparator())
+        sb.append(">>>>>>>>>>>>>>>>>>>>>>>>>>").append(System.lineSeparator())
+        sb.append("Request:").append(System.lineSeparator())
+        sb.append(s"$fullRequestName: $status ${errorMessage.getOrElse("")}").append(System.lineSeparator())
+        sb.append("=========================").append(System.lineSeparator())
+        sb.append(sessionToString(session)).append(System.lineSeparator())
+        sb.append("=========================").append(System.lineSeparator())
+        sb.append("gRPC request:").append(System.lineSeparator())
+        sb.append(payloadToString(payload)).append(System.lineSeparator())
+        sb.append(headers.toString).append(System.lineSeparator())
+        sb.append("=========================").append(System.lineSeparator())
+        sb.append("gRPC response:").append(System.lineSeparator())
+        sb.append(responseToString(bodyParsed, grpcStatus, trailers)).append(System.lineSeparator())
+        sb.append("<<<<<<<<<<<<<<<<<<<<<<<<<")
+
+        sb.toString
       }
 
       if (status == KO) {

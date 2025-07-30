@@ -1,7 +1,6 @@
 package com.github.phisgr.gatling.grpc.check
 
-import com.github.phisgr.gatling.grpc.check.GrpcCheck.{All, Scope}
-import com.softwaremill.quicklens._
+import com.github.phisgr.gatling.grpc.check.GrpcCheck.{Scope}
 import io.gatling.commons.validation.Validation
 import io.gatling.core.check.{Check, CheckResult}
 import io.gatling.core.session.{Expression, Session}
@@ -17,11 +16,13 @@ case class GrpcCheck[-T](
     wrapped.check(response, session, cache)
 
   override def checkIf(condition: Expression[Boolean]): GrpcCheck[T] =
-    this.modify(_.wrapped).using(_.checkIf(condition))
-  override def checkIf(condition: (GrpcResponse[T]@uncheckedVariance, Session) => Validation[Boolean]): GrpcCheck[T] =
-    this
-      .modify(_.wrapped).using(_.checkIf(condition))
-      .modify(_.scope).setTo(All)
+    copy(wrapped = wrapped.checkIf(condition))
+
+  override def checkIf(condition: (GrpcResponse[T] @uncheckedVariance, Session) => Validation[Boolean]): GrpcCheck[T] =
+    copy(
+      wrapped = wrapped.checkIf(condition),
+      scope = GrpcCheck.All
+    )
 }
 
 object GrpcCheck {

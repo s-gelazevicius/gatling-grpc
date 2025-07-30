@@ -4,17 +4,15 @@ import com.github.phisgr.gatling.generic.SessionCombiner
 import com.github.phisgr.gatling.grpc.check.GrpcResponse.GrpcStreamEnd
 import com.github.phisgr.gatling.grpc.check.{GrpcResponse, StreamCheck}
 import com.github.phisgr.gatling.grpc.stream.StreamCall._
-import com.github.phisgr.gatling.grpc.util.{GrpcStringBuilder, statusCodeOption}
+import com.github.phisgr.gatling.grpc.util.statusCodeOption
 import com.typesafe.scalalogging.StrictLogging
 import io.gatling.commons.stats.{KO, OK}
-import io.gatling.commons.util.StringHelper.Eol
 import io.gatling.commons.util.Throwables.PimpedException
 import io.gatling.commons.validation.{Failure, Validation}
 import io.gatling.core.action.Action
 import io.gatling.core.check.Check
 import io.gatling.core.session.Session
 import io.gatling.core.stats.StatsEngine
-import io.gatling.jdk.util.StringBuilderPool
 import io.grpc.{ClientCall, Metadata, Status}
 
 import scala.util.control.{NoStackTrace, NonFatal}
@@ -38,6 +36,33 @@ abstract class StreamCall[Req, Res, State >: Completed](
   protected var callStartTime: Long = _
 
   logger.debug(s"Opening stream '$streamName': Scenario '${streamSession.scenario}', UserId #${streamSession.userId}")
+
+  def sessionToString(session: Session): String =
+    session.attributes
+      .map { case (k, v) => s"$k -> $v" }
+      .mkString("Session:\n", "\n", "")
+
+  def responseToString(response: Any): String = response match {
+    case null => "null"
+    case msg: com.google.protobuf.Message => msg.toString
+    case other => other.toString
+  }
+
+  def grpcStatusToString(status: io.grpc.Status): String =
+    if (status == null) "Status: null"
+    else s"Status: ${status.getCode} - ${status.getDescription}"
+
+  def trailersToString(trailers: io.grpc.Metadata): String =
+    if (trailers == null) "Trailers: null"
+    else {
+      import scala.jdk.CollectionConverters._
+      val entries = trailers.keys().asScala.map { key =>
+        val value = trailers.get(io.grpc.Metadata.Key.of(key, io.grpc.Metadata.ASCII_STRING_MARSHALLER))
+        s"$key -> $value"
+      }
+      entries.mkString("Trailers:\n", "\n", "")
+    }
+
 
   private[gatling] def onRes(res: Any, receiveTime: Long): Unit = {
     // res is Unit if
@@ -90,20 +115,20 @@ abstract class StreamCall[Req, Res, State >: Completed](
         return
     }
 
-    def dump = {
-      StringBuilderPool.DEFAULT
-        .get()
-        .append(Eol)
-        .appendWithEol(">>>>>>>>>>>>>>>>>>>>>>>>>>")
-        .appendWithEol("Stream Message Check:")
-        .appendWithEol(s"$requestName - $streamName: $status ${errorMessage.getOrElse("")}")
-        .appendWithEol("=========================")
-        .appendSession(streamSession)
-        .appendWithEol("=========================")
-        .appendWithEol("gRPC stream message:")
-        .appendMessage(response)
-        .append("<<<<<<<<<<<<<<<<<<<<<<<<<")
-        .toString
+    def dump: String = {
+      val sb = new StringBuilder()
+      sb.append(System.lineSeparator())
+      sb.append(">>>>>>>>>>>>>>>>>>>>>>>>>>").append(System.lineSeparator())
+      sb.append("Stream Message Check:").append(System.lineSeparator())
+      sb.append(s"$requestName - $streamName: $status ${errorMessage.getOrElse("")}").append(System.lineSeparator())
+      sb.append("=========================").append(System.lineSeparator())
+      sb.append(sessionToString(streamSession)).append(System.lineSeparator())
+      sb.append("=========================").append(System.lineSeparator())
+      sb.append("gRPC stream message:").append(System.lineSeparator())
+      sb.append(responseToString(response)).append(System.lineSeparator())
+      sb.append("<<<<<<<<<<<<<<<<<<<<<<<<<")
+
+      sb.toString
     }
 
     if (status == KO) {
@@ -139,21 +164,21 @@ abstract class StreamCall[Req, Res, State >: Completed](
     val status = if (checkError.isEmpty) OK else KO
     val errorMessage = checkError.map(_.message)
 
-    def dump = {
-      StringBuilderPool.DEFAULT
-        .get()
-        .append(Eol)
-        .appendWithEol(">>>>>>>>>>>>>>>>>>>>>>>>>>")
-        .appendWithEol("Stream Close:")
-        .appendWithEol(s"$requestName - $streamName: $status ${errorMessage.getOrElse("")}")
-        .appendWithEol("=========================")
-        .appendSession(streamSession)
-        .appendWithEol("=========================")
-        .appendWithEol("gRPC stream completion:")
-        .appendStatus(grpcStatus)
-        .appendTrailers(trailers)
-        .append("<<<<<<<<<<<<<<<<<<<<<<<<<")
-        .toString
+    def dump: String = {
+      val sb = new StringBuilder()
+      sb.append(System.lineSeparator())
+      sb.append(">>>>>>>>>>>>>>>>>>>>>>>>>>").append(System.lineSeparator())
+      sb.append("Stream Close:").append(System.lineSeparator())
+      sb.append(s"$requestName - $streamName: $status ${errorMessage.getOrElse("")}").append(System.lineSeparator())
+      sb.append("=========================").append(System.lineSeparator())
+      sb.append(sessionToString(streamSession)).append(System.lineSeparator())
+      sb.append("=========================").append(System.lineSeparator())
+      sb.append("gRPC stream completion:").append(System.lineSeparator())
+      sb.append(grpcStatusToString(grpcStatus)).append(System.lineSeparator())
+      sb.append(trailersToString(trailers)).append(System.lineSeparator())
+      sb.append("<<<<<<<<<<<<<<<<<<<<<<<<<")
+
+      sb.toString
     }
 
     if (logWhen.eq(StreamCall.AlwaysLog) || (status == KO && logWhen.eq(ErrorOnly))) {
